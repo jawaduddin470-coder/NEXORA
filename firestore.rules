@@ -1,0 +1,57 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Users Collection: Users read their own profile; admins read all.
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      // Allow creation during registration with role == 'user'
+      allow create: if isOwner(userId) && request.resource.data.role == 'user';
+      // Allow profile updates (name, profileImage, updatedAt) but STRICTLY forbid escalating role
+      allow update: if (isOwner(userId) && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['role']) || request.resource.data.role == resource.data.role)) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Events Collection: Public read for event discovery, admin write
+    match /events/{eventId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Bookings Collection: Users read own bookings; bookings created via backend transaction route
+    match /bookings/{bookingId} {
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      // Bookings created and managed exclusively via secure Express backend Admin SDK transaction route
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Notifications Collection: Users read own notifications and toggle read flag only
+    match /notifications/{notificationId} {
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow update: if isAuthenticated() && 
+        resource.data.userId == request.auth.uid && 
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+      allow create, delete: if isAdmin();
+    }
+
+    // Activity Logs Collection: Admin read/write only
+    match /activityLogs/{logId} {
+      allow read, write: if isAdmin();
+    }
+  }
+}

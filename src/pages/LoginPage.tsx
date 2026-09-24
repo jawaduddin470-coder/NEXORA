@@ -1,0 +1,194 @@
+import React, { useState } from 'react';
+import { Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
+import { Mail, Lock, ArrowRight, AlertCircle, Eye, EyeOff, ShieldCheck, CheckCircle2 } from 'lucide-react';
+import { Button } from '../components/ui/Button';
+import { NexoraLogo } from '../components/common/NexoraLogo';
+
+export const LoginPage: React.FC = () => {
+  const { user, userProfile, isAuthenticated, loading: authLoading, login, error, clearError } = useAuth();
+  const { addToast } = useToast();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+
+  // Redirect destination priority: ?returnTo -> ?redirect -> router state -> /dashboard
+  const returnToParam = searchParams.get('returnTo') || searchParams.get('redirect');
+  const destination = returnToParam || location.state?.from?.pathname || '/dashboard';
+
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [validationError, setValidationError] = useState<string | null>(null);
+
+  // If already authenticated, redirect immediately
+  React.useEffect(() => {
+    if (!authLoading && isAuthenticated && user) {
+      const target = userProfile?.role === 'admin' && destination === '/dashboard' ? '/admin/overview' : destination;
+      navigate(target, { replace: true });
+    }
+  }, [authLoading, isAuthenticated, user, userProfile, destination, navigate]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setValidationError(null);
+
+    if (!email.trim() || !password) {
+      setValidationError('Please enter both email address and password.');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const profile = await login(email.trim(), password);
+      addToast('Welcome Back!', 'Successfully authenticated to your NEXORA account.', 'success');
+      const target = profile?.role === 'admin' && destination === '/dashboard' ? '/admin/overview' : destination;
+      navigate(target, { replace: true });
+    } catch (err: any) {
+      console.error('Login error:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-[85vh] flex items-center justify-center px-4 py-8 sm:py-16">
+      <div className="max-w-4xl w-full grid grid-cols-1 lg:grid-cols-12 rounded-3xl overflow-hidden glass-panel border border-slate-200/90 dark:border-slate-800 shadow-soft-lg">
+        {/* Left Editorial Branding Pane */}
+        <div className="lg:col-span-5 bg-gradient-to-br from-brand-purple via-brand-indigo to-slate-950 p-8 text-white flex flex-col justify-between relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-64 h-64 bg-brand-cyan/20 blur-3xl rounded-full pointer-events-none" />
+
+          <div className="space-y-4 relative z-10">
+            <NexoraLogo size="sm" showTagline={false} />
+            <div className="inline-block px-2.5 py-1 rounded-full bg-white/10 backdrop-blur-md border border-white/20 text-[9px] font-bold tracking-widest uppercase text-violet-200">
+              AUTHENTICATION GATE
+            </div>
+          </div>
+
+          <div className="space-y-4 my-8 relative z-10">
+            <h3 className="text-2xl sm:text-3xl font-extrabold font-heading leading-tight">
+              Unlock verified live event experiences.
+            </h3>
+            <div className="space-y-2 text-xs text-violet-200/90 font-normal">
+              <div className="flex items-center space-x-2">
+                <CheckCircle2 className="w-4 h-4 text-brand-cyan shrink-0" />
+                <span>Instant atomic ticket reservation</span>
+              </div>
+              <div className="flex items-center space-x-2">
+                <CheckCircle2 className="w-4 h-4 text-brand-cyan shrink-0" />
+                <span>Collectible 3D digital passes</span>
+              </div>
+              <div className="flex items-center space-x-2">
+                <CheckCircle2 className="w-4 h-4 text-brand-cyan shrink-0" />
+                <span>Real-time event notification sync</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="pt-4 border-t border-white/10 text-[11px] text-violet-200/80 flex items-center space-x-2 relative z-10">
+            <ShieldCheck className="w-4 h-4 text-brand-cyan shrink-0" />
+            <span>Encrypted Firebase Authentication</span>
+          </div>
+        </div>
+
+        {/* Right Form Pane */}
+        <div className="lg:col-span-7 p-8 sm:p-10 bg-white/95 dark:bg-slate-900/95 space-y-6 flex flex-col justify-center">
+          <div className="space-y-1">
+            <h2 className="text-2xl font-extrabold font-heading text-slate-900 dark:text-white">
+              Sign In to NEXORA
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Enter your registered credentials to access your account & passes
+            </p>
+          </div>
+
+          {/* Error Banner */}
+          {(error || validationError) && (
+            <div className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/30 text-rose-600 dark:text-rose-400 text-xs flex items-start space-x-2.5">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span className="leading-relaxed font-medium">{validationError || error}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-1.5">
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
+                Email Address
+              </label>
+              <div className="relative">
+                <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    clearError();
+                    setValidationError(null);
+                  }}
+                  placeholder="name@example.com"
+                  className="w-full pl-10 pr-4 py-3 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:border-brand-purple transition-colors font-medium shadow-soft-sm"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
+                Password
+              </label>
+              <div className="relative">
+                <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  value={password}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    clearError();
+                    setValidationError(null);
+                  }}
+                  placeholder="••••••••"
+                  className="w-full pl-10 pr-11 py-3 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:border-brand-purple transition-colors font-medium shadow-soft-sm"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                  aria-label="Toggle password visibility"
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
+            <Button
+              type="submit"
+              disabled={loading}
+              loading={loading}
+              variant="primary"
+              size="lg"
+              className="w-full mt-2"
+              icon={<ArrowRight className="w-4 h-4" />}
+            >
+              Sign In to NEXORA
+            </Button>
+          </form>
+
+          <div className="text-center pt-3 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400">
+            Don't have an account yet?{' '}
+            <Link
+              to={returnToParam ? `/register?returnTo=${encodeURIComponent(returnToParam)}` : '/register'}
+              className="font-bold text-brand-purple dark:text-brand-violet-light hover:underline"
+            >
+              Create one now
+            </Link>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default LoginPage;
