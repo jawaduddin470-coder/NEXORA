@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { adminDb, isConfigured } from '../firebaseAdmin.js';
+import { adminDb, adminAuth, isConfigured } from '../firebaseAdmin.js';
 import { authMiddleware, adminMiddleware, AuthenticatedRequest } from '../middleware/auth.js';
 
 const router = Router();
@@ -527,6 +527,151 @@ router.put('/notifications/mark-all-read', authMiddleware, adminMiddleware, asyn
     await batch.commit();
     res.json({ message: 'All notifications marked as read', updatedCount: unreadSnap.size });
   } catch (error: any) {
+    res.status(500).json({ error: 'Server Error', message: error.message });
+  }
+});
+
+// GET /api/admin/admins - List all authorized administrators
+router.get('/admins', authMiddleware, adminMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  if (!isConfigured || !adminDb || !adminAuth) {
+    res.status(503).json({ error: 'Service Unavailable', message: 'Firebase Admin SDK is not configured.' });
+    return;
+  }
+
+  try {
+    const adminDocs = await adminDb.collection('users').where('role', '==', 'admin').get();
+
+    const adminList = await Promise.all(
+      adminDocs.docs.map(async (doc) => {
+        const data = doc.data();
+        let authUser: any = null;
+        try {
+          authUser = await adminAuth!.getUser(doc.id);
+        } catch (e) {
+          // Fallback if not found in auth directly
+        }
+
+        return {
+          userId: doc.id,
+          name: data.name || authUser?.displayName || 'Administrator',
+          email: data.email || authUser?.email || '',
+          role: 'admin',
+          profileImage: data.profileImage || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(data.name || doc.id)}`,
+          createdAt: data.createdAt || authUser?.metadata?.creationTime || new Date().toISOString(),
+          lastSignInTime: authUser?.metadata?.lastSignInTime || null,
+          disabled: Boolean(authUser?.disabled),
+        };
+      })
+    );
+
+    adminList.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    res.json({
+      admins: adminList,
+      count: adminList.length,
+    });
+  } catch (error: any) {
+    console.error('List admins error:', error);
+    res.status(500).json({ error: 'Server Error', message: error.message });
+  }
+});
+
+// POST /api/admin/admins - Create additional administrator account (Admin Only)
+router.post('/admins', authMiddleware, adminMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  if (!isConfigured || !adminDb || !adminAuth) {
+    res.status(503).json({ error: 'Service Unavailable', message: 'Firebase Admin SDK is not configured.' });
+    return;
+  }
+
+  try {
+    const { name, email, password } = req.body;
+
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      res.status(400).json({ error: 'Bad Request', message: 'Full Name is required.' });
+      return;
+    }
+
+    if (!email || typeof email !== 'string' || !email.includes('@')) {
+      res.status(400).json({ error: 'Bad Request', message: 'Valid Email address is required.' });
+      return;
+    }
+
+    if (!password || typeof password !== 'string' || password.length < 6) {
+      res.status(400).json({ error: 'Bad Request', message: 'Password must be at least 6 characters long.' });
+      return;
+    }
+
+    const trimmedEmail = email.trim().toLowerCase();
+    const trimmedName = name.trim();
+
+    // Check if user already exists in Firebase Auth
+    try {
+      const existingUser = await adminAuth.getUserByEmail(trimmedEmail);
+      if (existingUser) {
+        res.status(409).json({
+          error: 'Conflict',
+          message: 'An account with this email address already exists.',
+        });
+        return;
+      }
+    } catch (err: any) {
+      if (err.code !== 'auth/user-not-found') {
+        throw err;
+      }
+    }
+
+    // 1. Create Firebase Auth user
+    const newUserRecord = await adminAuth.createUser({
+      email: trimmedEmail,
+      password,
+      displayName: trimmedName,
+      emailVerified: true,
+    });
+
+    // 2. Set Custom User Claims for role: admin
+    await adminAuth.setCustomUserClaims(newUserRecord.uid, {
+      role: 'admin',
+      admin: true,
+    });
+
+    // 3. Create Firestore user document with role: 'admin'
+    const newAdminData = {
+      userId: newUserRecord.uid,
+      name: trimmedName,
+      email: trimmedEmail,
+      role: 'admin',
+      profileImage: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(trimmedName)}`,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      createdBy: req.user!.uid,
+    };
+
+    await adminDb.collection('users').doc(newUserRecord.uid).set(newAdminData);
+
+    // 4. Log to activity logs
+    await adminDb.collection('activityLogs').add({
+      userId: req.user!.uid,
+      action: 'ADMIN_CREATED',
+      details: {
+        createdAdminUid: newUserRecord.uid,
+        createdAdminEmail: trimmedEmail,
+        createdAdminName: trimmedName,
+      },
+      createdAt: new Date().toISOString(),
+    });
+
+    res.status(201).json({
+      message: 'Admin account created successfully.',
+      admin: {
+        userId: newUserRecord.uid,
+        name: trimmedName,
+        email: trimmedEmail,
+        role: 'admin',
+        createdAt: newAdminData.createdAt,
+      },
+    });
+  } catch (error: any) {
+    console.error('Create Admin Error:', error);
     res.status(500).json({ error: 'Server Error', message: error.message });
   }
 });

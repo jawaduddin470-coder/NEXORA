@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { storage } from '../lib/firebase';
@@ -22,6 +22,9 @@ import {
   CheckCircle2,
   AlertCircle,
   Star,
+  ImageIcon,
+  X,
+  FileText,
 } from 'lucide-react';
 
 const CATEGORIES: EventCategory[] = [
@@ -43,6 +46,7 @@ export const AdminCreateEditEvent: React.FC = () => {
   const navigate = useNavigate();
   const { getIdToken } = useAuth();
   const { addToast } = useToast();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [existingEvent, setExistingEvent] = useState<EventItem | null>(null);
 
@@ -50,7 +54,9 @@ export const AdminCreateEditEvent: React.FC = () => {
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState<EventCategory>('Technology');
   const [description, setDescription] = useState('');
-  const [bannerImage, setBannerImage] = useState('https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=1200');
+  const [bannerImage, setBannerImage] = useState(
+    'https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=1200'
+  );
   const [date, setDate] = useState('');
   const [startTime, setStartTime] = useState('09:00 AM');
   const [endTime, setEndTime] = useState('05:00 PM');
@@ -61,9 +67,11 @@ export const AdminCreateEditEvent: React.FC = () => {
   const [status, setStatus] = useState<EventStatus>('published');
   const [featured, setFeatured] = useState<boolean>(false);
 
-  // Image Upload State
-  const [uploading, setUploading] = useState(false);
+  // Image Selection & Upload State
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadStatusText, setUploadStatusText] = useState<string | null>(null);
 
   // Status State
   const [loading, setLoading] = useState(isEditing);
@@ -84,8 +92,8 @@ export const AdminCreateEditEvent: React.FC = () => {
           setDescription(data.description || '');
           setBannerImage(data.bannerImage || '');
           setDate(data.date || '');
-          setStartTime(data.startTime || data.time || '09:00 AM');
-          setEndTime(data.endTime || '05:00 PM');
+          setStartTime(data.startTime || data.time?.split(' - ')[0] || '09:00 AM');
+          setEndTime(data.endTime || data.time?.split(' - ')[1] || '05:00 PM');
           setVenue(data.venue || '');
           setCity(data.city || data.location || '');
           setCapacity(data.capacity || 200);
@@ -95,6 +103,7 @@ export const AdminCreateEditEvent: React.FC = () => {
         }
       } catch (err) {
         console.error('Error fetching event for edit:', err);
+        setError('Failed to load event data for editing.');
       } finally {
         setLoading(false);
       }
@@ -102,18 +111,22 @@ export const AdminCreateEditEvent: React.FC = () => {
     loadEvent();
   }, [id]);
 
-  // Handle banner upload to Firebase Storage
+  // Clean up object URL on unmount or file change
+  useEffect(() => {
+    return () => {
+      if (previewUrl && previewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(previewUrl);
+      }
+    };
+  }, [previewUrl]);
+
+  // Handle local file selection with instant preview & validation
   const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!storage) {
-      addToast('Storage Error', 'Firebase Storage client is not initialized.', 'error');
-      return;
-    }
-
     if (!file.type.startsWith('image/')) {
-      setError('Selected file must be a valid image (PNG, JPG, WEBP).');
+      setError('Selected file must be a valid image (PNG, JPG, JPEG, WEBP).');
       return;
     }
 
@@ -123,37 +136,71 @@ export const AdminCreateEditEvent: React.FC = () => {
     }
 
     setError(null);
-    const storageRef = ref(storage, `events/${Date.now()}_${file.name}`);
-    const uploadTask = uploadBytesResumable(storageRef, file);
+    setSelectedFile(file);
 
-    setUploading(true);
-    setUploadProgress(0);
+    // Revoke previous object URL if any
+    if (previewUrl && previewUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(previewUrl);
+    }
 
-    uploadTask.on(
-      'state_changed',
-      (snapshot) => {
-        const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-        setUploadProgress(Math.round(progress));
-      },
-      (err) => {
-        console.error('Firebase Storage upload error:', err);
-        setUploading(false);
-        addToast('Upload Failed', err.message || 'Image upload failed.', 'error');
-      },
-      async () => {
-        const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
-        setBannerImage(downloadUrl);
-        setUploading(false);
-        addToast('Image Uploaded', 'Event banner image uploaded to Firebase Storage.', 'success');
-      }
-    );
+    const objectUrl = URL.createObjectURL(file);
+    setPreviewUrl(objectUrl);
+  };
+
+  const handleRemoveSelectedImage = () => {
+    if (previewUrl && previewUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(previewUrl);
+    }
+    setSelectedFile(null);
+    setPreviewUrl(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  // Upload helper to upload image to Firebase Storage and return download URL
+  const uploadImageToStorage = async (file: File): Promise<string> => {
+    if (!storage) {
+      throw new Error('Firebase Storage client is not initialized.');
+    }
+
+    const sanitizedName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const storagePath = `events/${Date.now()}_${sanitizedName}`;
+    const storageRef = ref(storage, storagePath);
+
+    return new Promise((resolve, reject) => {
+      const uploadTask = uploadBytesResumable(storageRef, file, {
+        contentType: file.type,
+      });
+
+      uploadTask.on(
+        'state_changed',
+        (snapshot) => {
+          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+          setUploadProgress(Math.round(progress));
+          setUploadStatusText(`Uploading banner... ${Math.round(progress)}%`);
+        },
+        (uploadErr) => {
+          console.error('Firebase Storage upload error:', uploadErr);
+          reject(new Error(uploadErr.message || 'Firebase Storage upload failed.'));
+        },
+        async () => {
+          try {
+            const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
+            resolve(downloadUrl);
+          } catch (urlErr: any) {
+            reject(new Error(urlErr.message || 'Failed to retrieve download URL for uploaded banner.'));
+          }
+        }
+      );
+    });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
-    // Validation
+    // Form Validations
     if (!title.trim()) {
       setError('Event Title is required.');
       return;
@@ -196,6 +243,27 @@ export const AdminCreateEditEvent: React.FC = () => {
 
     try {
       setSaving(true);
+
+      // STEP 1: Upload banner if a new file is selected
+      let finalBannerUrl = bannerImage;
+      if (selectedFile) {
+        setUploadStatusText('Uploading banner to Firebase Storage...');
+        setUploadProgress(0);
+        try {
+          finalBannerUrl = await uploadImageToStorage(selectedFile);
+          setBannerImage(finalBannerUrl);
+        } catch (uploadError: any) {
+          console.error('Banner upload failed:', uploadError);
+          setError(`Banner upload failed: ${uploadError.message}. Event was not saved.`);
+          addToast('Upload Error', uploadError.message || 'Image upload failed', 'error');
+          setSaving(false);
+          setUploadStatusText(null);
+          return; // Do NOT proceed to save if image upload was requested but failed
+        }
+      }
+
+      // STEP 2: Save Event Specification to Firestore via REST API
+      setUploadStatusText(isEditing ? 'Updating event specification...' : 'Publishing event to Firestore...');
       const token = await getIdToken();
       const apiBase = import.meta.env.VITE_API_BASE_URL || '/api';
       const url = isEditing ? `${apiBase}/events/${id}` : `${apiBase}/events`;
@@ -211,7 +279,7 @@ export const AdminCreateEditEvent: React.FC = () => {
           title: title.trim(),
           category,
           description: description.trim(),
-          bannerImage,
+          bannerImage: finalBannerUrl,
           date,
           time: `${startTime} - ${endTime}`,
           startTime,
@@ -228,12 +296,12 @@ export const AdminCreateEditEvent: React.FC = () => {
 
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.message || 'Failed to save event');
+        throw new Error(data.message || 'Failed to save event to Firestore');
       }
 
       addToast(
         isEditing ? 'Event Updated' : 'Event Published',
-        `"${title}" has been saved to Cloud Firestore.`,
+        `"${title}" has been saved to Cloud Firestore with its banner image.`,
         'success'
       );
       navigate('/admin/events');
@@ -242,17 +310,22 @@ export const AdminCreateEditEvent: React.FC = () => {
       setError(err.message || 'Error executing event save.');
     } finally {
       setSaving(false);
+      setUploadStatusText(null);
     }
   };
 
   if (loading) {
     return (
-      <div className="max-w-3xl mx-auto py-12 text-center space-y-4">
-        <Loader2 className="w-8 h-8 text-violet-600 animate-spin mx-auto" />
-        <p className="text-xs text-slate-400">Loading Event Specification...</p>
-      </div>
+      <AdminLayout>
+        <div className="max-w-3xl mx-auto py-16 text-center space-y-4">
+          <Loader2 className="w-8 h-8 text-brand-purple animate-spin mx-auto" />
+          <p className="text-xs text-slate-400 font-mono">Loading Event Specification...</p>
+        </div>
+      </AdminLayout>
     );
   }
+
+  const currentDisplayImage = previewUrl || bannerImage;
 
   return (
     <AdminLayout>
@@ -260,228 +333,319 @@ export const AdminCreateEditEvent: React.FC = () => {
         <button
           onClick={() => navigate('/admin/events')}
           className="flex items-center space-x-1 text-xs font-bold text-slate-400 hover:text-white transition"
-      >
-        <ChevronLeft className="w-4 h-4" />
-        <span>Back to Events Catalog</span>
-      </button>
+        >
+          <ChevronLeft className="w-4 h-4" />
+          <span>Back to Events Catalog</span>
+        </button>
 
-      <div className="space-y-1">
-        <div className="inline-flex items-center space-x-2 text-cyan-600 dark:text-cyan-400 text-xs font-bold uppercase tracking-widest">
-          <ShieldCheck className="w-4 h-4" />
-          <span>{isEditing ? 'Edit Event Specification' : 'Create New Event Listing'}</span>
+        <div className="space-y-1">
+          <div className="inline-flex items-center space-x-2 text-cyan-400 text-xs font-bold uppercase tracking-widest">
+            <ShieldCheck className="w-4 h-4" />
+            <span>{isEditing ? 'Edit Event Specification' : 'Create New Event Listing'}</span>
+          </div>
+          <h1 className="text-3xl sm:text-4xl font-extrabold font-heading text-white">
+            {isEditing ? `Edit "${title || 'Event'}"` : 'Publish New Event'}
+          </h1>
         </div>
-        <h1 className="text-3xl sm:text-4xl font-extrabold font-heading text-slate-900 dark:text-white">
-          {isEditing ? `Edit "${title || 'Event'}"` : 'Publish New Event'}
-        </h1>
-      </div>
 
-      {error && (
-        <div className="p-4 rounded-2xl bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/30 text-rose-600 dark:text-rose-400 text-xs flex items-center space-x-2">
-          <AlertCircle className="w-4 h-4 shrink-0" />
-          <span>{error}</span>
-        </div>
-      )}
+        {error && (
+          <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center space-x-3">
+            <AlertCircle className="w-5 h-5 shrink-0 text-rose-400" />
+            <span className="font-medium">{error}</span>
+          </div>
+        )}
 
-      <form onSubmit={handleSubmit} className="glass-panel p-6 sm:p-8 rounded-3xl space-y-6 border border-slate-200 dark:border-slate-800 shadow-soft">
-        {/* Banner Upload Section */}
-        <div className="space-y-3">
-          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
-            Event Banner Image
-          </label>
-          <div className="flex flex-col sm:flex-row items-center gap-4">
-            <div className="relative w-full sm:w-56 h-32 rounded-2xl overflow-hidden bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shrink-0 shadow-soft-sm">
-              <img src={bannerImage} alt="Banner Preview" className="w-full h-full object-cover" />
-            </div>
-
-            <div className="space-y-2 flex-1 w-full">
-              <input
-                type="file"
-                accept="image/*"
-                onChange={handleImageFileChange}
-                className="hidden"
-                id="banner-file-input"
-              />
-              <label
-                htmlFor="banner-file-input"
-                className="inline-flex items-center space-x-2 px-4 py-2.5 rounded-2xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-700 dark:text-slate-200 hover:text-violet-600 dark:hover:text-white hover:border-violet-400 cursor-pointer font-bold transition shadow-soft-sm"
-              >
-                <Upload className="w-4 h-4 text-violet-600 dark:text-violet-400" />
-                <span>Upload Banner to Firebase Storage</span>
+        <form onSubmit={handleSubmit} className="p-6 sm:p-8 rounded-3xl space-y-6 bg-slate-900/60 border border-slate-800/80 backdrop-blur-xl shadow-2xl">
+          {/* Banner Upload Section */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="block text-xs font-bold text-slate-300 flex items-center space-x-1.5">
+                <ImageIcon className="w-4 h-4 text-brand-purple" />
+                <span>Event Banner Image (Firebase Storage)</span>
               </label>
-
-              {uploading && (
-                <div className="space-y-1 pt-1">
-                  <div className="w-full bg-slate-200 dark:bg-slate-800 h-2 rounded-full overflow-hidden">
-                    <div className="bg-violet-600 h-full transition-all" style={{ width: `${uploadProgress}%` }} />
-                  </div>
-                  <span className="text-[10px] text-slate-400 font-mono">Uploading: {uploadProgress}%</span>
-                </div>
+              {selectedFile && (
+                <span className="text-[11px] text-cyan-400 font-mono flex items-center space-x-1">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Ready to upload: {selectedFile.name} ({(selectedFile.size / 1024 / 1024).toFixed(2)} MB)</span>
+                </span>
               )}
             </div>
-          </div>
-        </div>
 
-        {/* Form Fields Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div className="sm:col-span-2 space-y-1">
-            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">Event Title *</label>
-            <input
-              type="text"
-              required
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="e.g. Global AI & Web3 Summit 2026"
-              className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white font-medium"
-            />
-          </div>
+            <div className="flex flex-col sm:flex-row items-start gap-4">
+              {/* Image Preview Box */}
+              <div className="relative w-full sm:w-64 h-36 rounded-2xl overflow-hidden bg-slate-950 border border-slate-800 shrink-0 shadow-lg group">
+                <img
+                  src={currentDisplayImage}
+                  alt="Banner Preview"
+                  className="w-full h-full object-cover"
+                />
+                {previewUrl && (
+                  <div className="absolute top-2 left-2 px-2 py-0.5 rounded-lg bg-cyan-500 text-slate-950 font-bold text-[10px] tracking-wider uppercase shadow-md">
+                    Local Preview
+                  </div>
+                )}
+                {selectedFile && (
+                  <button
+                    type="button"
+                    onClick={handleRemoveSelectedImage}
+                    title="Remove selected image and restore original"
+                    className="absolute top-2 right-2 p-1.5 rounded-xl bg-slate-950/80 hover:bg-rose-500 text-slate-300 hover:text-white transition shadow-md"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
 
-          <div className="space-y-1">
-            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">Category *</label>
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value as EventCategory)}
-              className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-700 dark:text-slate-200 font-semibold"
-            >
-              {CATEGORIES.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-          </div>
+              {/* Upload Controls & Instructions */}
+              <div className="space-y-3 flex-1 w-full">
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/jpg,image/webp,image/svg+xml"
+                  onChange={handleImageFileChange}
+                  ref={fileInputRef}
+                  className="hidden"
+                  id="banner-file-input"
+                  disabled={saving}
+                />
 
-          <div className="space-y-1">
-            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">Status *</label>
-            <select
-              value={status}
-              onChange={(e) => setStatus(e.target.value as EventStatus)}
-              className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-700 dark:text-slate-200 font-semibold"
-            >
-              {STATUSES.map((s) => (
-                <option key={s} value={s}>
-                  {s.toUpperCase()}
-                </option>
-              ))}
-            </select>
-          </div>
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <label
+                    htmlFor="banner-file-input"
+                    className={`inline-flex items-center space-x-2 px-4 py-2.5 rounded-2xl border text-xs font-bold transition shadow-sm cursor-pointer ${
+                      saving
+                        ? 'opacity-50 pointer-events-none bg-slate-800 text-slate-500 border-slate-700'
+                        : 'bg-slate-950 hover:bg-slate-800 text-white border-slate-700 hover:border-brand-purple'
+                    }`}
+                  >
+                    <Upload className="w-4 h-4 text-brand-purple" />
+                    <span>{selectedFile ? 'Change Selected Image' : 'Select Image from Computer'}</span>
+                  </label>
 
-          <div className="space-y-1">
-            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">Event Date *</label>
-            <input
-              type="date"
-              required
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white font-medium"
-            />
-          </div>
+                  {selectedFile && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleRemoveSelectedImage}
+                      className="text-xs text-slate-400 hover:text-rose-400"
+                    >
+                      Clear Selection
+                    </Button>
+                  )}
+                </div>
 
-          <div className="space-y-1">
-            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">Start Time *</label>
-            <input
-              type="text"
-              required
-              value={startTime}
-              onChange={(e) => setStartTime(e.target.value)}
-              placeholder="09:00 AM"
-              className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white font-medium"
-            />
-          </div>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  Supported formats: PNG, JPG, JPEG, WEBP. Maximum file size: 5 MB. Image is validated locally and uploaded securely to Firebase Storage upon saving.
+                </p>
 
-          <div className="space-y-1">
-            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">End Time *</label>
-            <input
-              type="text"
-              required
-              value={endTime}
-              onChange={(e) => setEndTime(e.target.value)}
-              placeholder="05:00 PM"
-              className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white font-medium"
-            />
-          </div>
-
-          <div className="space-y-1">
-            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">Venue Name *</label>
-            <input
-              type="text"
-              required
-              value={venue}
-              onChange={(e) => setVenue(e.target.value)}
-              placeholder="Metropolis Convention Center"
-              className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white font-medium"
-            />
-          </div>
-
-          <div className="space-y-1">
-            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">City / Location *</label>
-            <input
-              type="text"
-              required
-              value={city}
-              onChange={(e) => setCity(e.target.value)}
-              placeholder="San Francisco, CA"
-              className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white font-medium"
-            />
-          </div>
-
-          <div className="space-y-1">
-            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">Total Capacity (Seats) *</label>
-            <input
-              type="number"
-              required
-              min={1}
-              value={capacity}
-              onChange={(e) => setCapacity(Number(e.target.value))}
-              className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white font-medium"
-            />
-          </div>
-
-          <div className="space-y-1">
-            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">Ticket Price ($ USD) *</label>
-            <input
-              type="number"
-              required
-              min={0}
-              value={ticketPrice}
-              onChange={(e) => setTicketPrice(Number(e.target.value))}
-              className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white font-medium"
-            />
-          </div>
-
-          <div className="sm:col-span-2 space-y-1">
-            <div className="flex items-center space-x-2 pt-2">
-              <input
-                type="checkbox"
-                id="featured-checkbox"
-                checked={featured}
-                onChange={(e) => setFeatured(e.target.checked)}
-                className="w-4 h-4 rounded bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-800 text-violet-600 focus:ring-violet-500"
-              />
-              <label htmlFor="featured-checkbox" className="text-xs font-bold text-slate-700 dark:text-slate-200 cursor-pointer flex items-center space-x-1">
-                <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
-                <span>Feature on Landing Page Spotlight Carousel</span>
-              </label>
+                {/* Upload Progress Bar */}
+                {saving && uploadStatusText && (
+                  <div className="space-y-1.5 pt-2">
+                    <div className="w-full bg-slate-950 h-2.5 rounded-full overflow-hidden border border-slate-800">
+                      <div
+                        className="bg-gradient-to-r from-brand-purple to-brand-cyan h-full transition-all duration-300"
+                        style={{ width: `${selectedFile ? uploadProgress : 100}%` }}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono">
+                      <span className="flex items-center space-x-1.5 text-cyan-300">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>{uploadStatusText}</span>
+                      </span>
+                      {selectedFile && <span>{uploadProgress}%</span>}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
-          <div className="sm:col-span-2 space-y-1">
-            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">Description *</label>
-            <textarea
-              rows={4}
-              required
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Provide a detailed description of the event schedule and speakers..."
-              className="w-full p-4 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white font-medium"
-            />
-          </div>
-        </div>
+          {/* Form Fields Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="sm:col-span-2 space-y-1">
+              <label className="block text-xs font-bold text-slate-300">Event Title *</label>
+              <input
+                type="text"
+                required
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="e.g. Global AI & Web3 Summit 2026"
+                disabled={saving}
+                className="w-full px-4 py-2.5 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white placeholder-slate-500 font-medium focus:outline-none focus:border-brand-purple"
+              />
+            </div>
 
-        <Button type="submit" loading={saving} variant="primary" size="lg" className="w-full font-bold">
-          {isEditing ? 'Save Event Specification Changes' : 'Publish Event Listing to Firestore'}
-        </Button>
-      </form>
+            <div className="space-y-1">
+              <label className="block text-xs font-bold text-slate-300">Category *</label>
+              <select
+                value={category}
+                onChange={(e) => setCategory(e.target.value as EventCategory)}
+                disabled={saving}
+                className="w-full px-4 py-2.5 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white font-semibold focus:outline-none focus:border-brand-purple"
+              >
+                {CATEGORIES.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-1">
+              <label className="block text-xs font-bold text-slate-300">Status *</label>
+              <select
+                value={status}
+                onChange={(e) => setStatus(e.target.value as EventStatus)}
+                disabled={saving}
+                className="w-full px-4 py-2.5 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white font-semibold focus:outline-none focus:border-brand-purple"
+              >
+                {STATUSES.map((s) => (
+                  <option key={s} value={s}>
+                    {s.toUpperCase()}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-1">
+              <label className="block text-xs font-bold text-slate-300">Event Date *</label>
+              <input
+                type="date"
+                required
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+                disabled={saving}
+                className="w-full px-4 py-2.5 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white font-medium focus:outline-none focus:border-brand-purple"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="block text-xs font-bold text-slate-300">Start Time *</label>
+              <input
+                type="text"
+                required
+                value={startTime}
+                onChange={(e) => setStartTime(e.target.value)}
+                placeholder="09:00 AM"
+                disabled={saving}
+                className="w-full px-4 py-2.5 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white font-medium focus:outline-none focus:border-brand-purple"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="block text-xs font-bold text-slate-300">End Time *</label>
+              <input
+                type="text"
+                required
+                value={endTime}
+                onChange={(e) => setEndTime(e.target.value)}
+                placeholder="05:00 PM"
+                disabled={saving}
+                className="w-full px-4 py-2.5 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white font-medium focus:outline-none focus:border-brand-purple"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="block text-xs font-bold text-slate-300">Venue Name *</label>
+              <input
+                type="text"
+                required
+                value={venue}
+                onChange={(e) => setVenue(e.target.value)}
+                placeholder="Metropolis Convention Center"
+                disabled={saving}
+                className="w-full px-4 py-2.5 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white font-medium focus:outline-none focus:border-brand-purple"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="block text-xs font-bold text-slate-300">City / Location *</label>
+              <input
+                type="text"
+                required
+                value={city}
+                onChange={(e) => setCity(e.target.value)}
+                placeholder="San Francisco, CA"
+                disabled={saving}
+                className="w-full px-4 py-2.5 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white font-medium focus:outline-none focus:border-brand-purple"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="block text-xs font-bold text-slate-300">Total Capacity (Seats) *</label>
+              <input
+                type="number"
+                required
+                min={1}
+                value={capacity}
+                onChange={(e) => setCapacity(Number(e.target.value))}
+                disabled={saving}
+                className="w-full px-4 py-2.5 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white font-medium focus:outline-none focus:border-brand-purple"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="block text-xs font-bold text-slate-300">Ticket Price ($ USD) *</label>
+              <input
+                type="number"
+                required
+                min={0}
+                value={ticketPrice}
+                onChange={(e) => setTicketPrice(Number(e.target.value))}
+                disabled={saving}
+                className="w-full px-4 py-2.5 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white font-medium focus:outline-none focus:border-brand-purple"
+              />
+            </div>
+
+            <div className="sm:col-span-2 space-y-1">
+              <div className="flex items-center space-x-2 pt-2">
+                <input
+                  type="checkbox"
+                  id="featured-checkbox"
+                  checked={featured}
+                  onChange={(e) => setFeatured(e.target.checked)}
+                  disabled={saving}
+                  className="w-4 h-4 rounded bg-slate-950 border-slate-800 text-brand-purple focus:ring-brand-purple"
+                />
+                <label htmlFor="featured-checkbox" className="text-xs font-bold text-slate-300 cursor-pointer flex items-center space-x-1">
+                  <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
+                  <span>Feature on Landing Page Spotlight Carousel</span>
+                </label>
+              </div>
+            </div>
+
+            <div className="sm:col-span-2 space-y-1">
+              <label className="block text-xs font-bold text-slate-300">Description *</label>
+              <textarea
+                rows={4}
+                required
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="Provide a detailed description of the event schedule and speakers..."
+                disabled={saving}
+                className="w-full p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white font-medium focus:outline-none focus:border-brand-purple"
+              />
+            </div>
+          </div>
+
+          <Button
+            type="submit"
+            loading={saving}
+            disabled={saving}
+            variant="primary"
+            size="lg"
+            className="w-full font-bold bg-gradient-to-r from-brand-purple to-brand-indigo hover:opacity-95 text-white py-3 rounded-2xl shadow-lg shadow-violet-950/50"
+          >
+            {saving
+              ? uploadStatusText || 'Saving Event...'
+              : isEditing
+              ? 'Save Event Specification Changes'
+              : 'Publish Event Listing to Firestore'}
+          </Button>
+        </form>
       </div>
     </AdminLayout>
   );
 };
+
+export default AdminCreateEditEvent;

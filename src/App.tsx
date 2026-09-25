@@ -30,6 +30,7 @@ import { AdminUsers } from './pages/AdminUsers';
 import { AdminNotifications } from './pages/AdminNotifications';
 import { AdminAnalyticsReports } from './pages/AdminAnalyticsReports';
 import { AdminSystem } from './pages/AdminSystem';
+import { AdminManagement } from './pages/AdminManagement';
 
 import { IntroProvider, useIntro } from './context/IntroContext';
 import { CinematicIntro } from './components/intro/CinematicIntro';
@@ -197,6 +198,22 @@ const AppContent: React.FC = () => {
             element={
               <ProtectedRoute requireAdmin>
                 <AdminUsers />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/management"
+            element={
+              <ProtectedRoute requireAdmin>
+                <AdminManagement />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/admins"
+            element={
+              <ProtectedRoute requireAdmin>
+                <Navigate to="/admin/management" replace />
               </ProtectedRoute>
             }
           />

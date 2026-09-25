@@ -40,6 +40,7 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({ children }) => {
     { name: 'Events', path: '/admin/events', icon: Calendar },
     { name: 'Bookings', path: '/admin/bookings', icon: Ticket },
     { name: 'Users', path: '/admin/users', icon: Users },
+    { name: 'Admins', path: '/admin/management', icon: ShieldCheck },
     { name: 'Analytics', path: '/admin/analytics', icon: BarChart3 },
     { name: 'Notifications', path: '/admin/notifications', icon: Bell },
     { name: 'Reports', path: '/admin/reports', icon: FileSpreadsheet },
