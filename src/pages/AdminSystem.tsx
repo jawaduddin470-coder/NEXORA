@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { AdminLayout } from '../components/admin/AdminLayout';
 import { Badge } from '../components/ui/Badge';
+import { getApiBaseUrl } from '../lib/api';
 import {
   Server,
   ShieldCheck,
@@ -23,7 +24,7 @@ export const AdminSystem: React.FC = () => {
     try {
       setLoading(true);
       const start = performance.now();
-      const apiBase = import.meta.env.VITE_API_BASE_URL || '/api';
+      const apiBase = getApiBaseUrl();
       const res = await fetch(`${apiBase}/health`);
       const end = performance.now();
       setLatency(Math.round(end - start));

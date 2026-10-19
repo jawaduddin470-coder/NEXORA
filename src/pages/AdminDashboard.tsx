@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { AdminLayout } from '../components/admin/AdminLayout';
 import { AdminAnalyticsData, EventPerformanceItem } from '../types';
+import { getApiBaseUrl } from '../lib/api';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import {
@@ -69,7 +70,7 @@ export const AdminDashboard: React.FC = () => {
       setLoading(true);
       setError(null);
       const token = await getIdToken();
-      const apiBase = import.meta.env.VITE_API_BASE_URL || '/api';
+      const apiBase = getApiBaseUrl();
       const params = new URLSearchParams();
       if (timeRange !== 'all') params.append('timeRange', timeRange);
       if (categoryFilter !== 'all') params.append('category', categoryFilter);

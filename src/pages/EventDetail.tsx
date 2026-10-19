@@ -4,6 +4,7 @@ import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../context/AuthContext';
 import { EventItem } from '../types';
+import { getApiBaseUrl } from '../lib/api';
 import { Ticket3D } from '../components/3d/Ticket3D';
 import { Button } from '../components/ui/Button';
 import {
@@ -41,7 +42,7 @@ export const EventDetail: React.FC = () => {
 
     const fetchFallback = async () => {
       try {
-        const apiBase = import.meta.env.VITE_API_BASE_URL || '/api';
+        const apiBase = getApiBaseUrl();
         const res = await fetch(`${apiBase}/events/${id}`);
         if (res.ok) {
           const data = await res.json();

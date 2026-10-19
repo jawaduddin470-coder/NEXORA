@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
+import { getApiBaseUrl } from '../lib/api';
 import { AdminLayout } from '../components/admin/AdminLayout';
 import { EventItem, EventCategory, EventStatus } from '../types';
 import { Badge } from '../components/ui/Badge';
@@ -58,7 +59,7 @@ export const AdminEvents: React.FC = () => {
   const fetchAdminEvents = async () => {
     try {
       setLoading(true);
-      const apiBase = import.meta.env.VITE_API_BASE_URL || '/api';
+      const apiBase = getApiBaseUrl();
       const res = await fetch(`${apiBase}/events?status=all`);
       const data = await res.json();
       setEvents(data.events || []);
@@ -82,7 +83,7 @@ export const AdminEvents: React.FC = () => {
     try {
       setDeletingId(evt.eventId);
       const token = await getIdToken();
-      const apiBase = import.meta.env.VITE_API_BASE_URL || '/api';
+      const apiBase = getApiBaseUrl();
       const res = await fetch(`${apiBase}/events/${evt.eventId}`, {
         method: 'DELETE',
         headers: {
@@ -112,7 +113,7 @@ export const AdminEvents: React.FC = () => {
     try {
       setTogglingFeaturedId(evt.eventId);
       const token = await getIdToken();
-      const apiBase = import.meta.env.VITE_API_BASE_URL || '/api';
+      const apiBase = getApiBaseUrl();
       const newFeatured = !evt.featured;
 
       const res = await fetch(`${apiBase}/events/${evt.eventId}`, {

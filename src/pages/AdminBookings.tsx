@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { AdminLayout } from '../components/admin/AdminLayout';
 import { BookingItem } from '../types';
+import { getApiBaseUrl } from '../lib/api';
 import { Badge } from '../components/ui/Badge';
 import { Ticket3D } from '../components/3d/Ticket3D';
 import {
@@ -33,7 +34,7 @@ export const AdminBookings: React.FC = () => {
     try {
       setLoading(true);
       const token = await getIdToken();
-      const apiBase = import.meta.env.VITE_API_BASE_URL || '/api';
+      const apiBase = getApiBaseUrl();
       const res = await fetch(`${apiBase}/admin/bookings`, {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -59,7 +60,7 @@ export const AdminBookings: React.FC = () => {
     try {
       setCancelling(true);
       const token = await getIdToken();
-      const apiBase = import.meta.env.VITE_API_BASE_URL || '/api';
+      const apiBase = getApiBaseUrl();
       const res = await fetch(`${apiBase}/bookings/${bookingId}/cancel`, {
         method: 'POST',
         headers: {

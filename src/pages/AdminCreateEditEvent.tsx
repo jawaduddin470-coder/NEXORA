@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { storage } from '../lib/firebase';
+import { getApiBaseUrl } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { AdminLayout } from '../components/admin/AdminLayout';
@@ -91,8 +92,11 @@ export const AdminCreateEditEvent: React.FC = () => {
     if (!id) return;
     async function loadEvent() {
       try {
-        const apiBase = import.meta.env.VITE_API_BASE_URL || '/api';
-        const res = await fetch(`${apiBase}/events/${id}`);
+        const apiBase = getApiBaseUrl();
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
+        const res = await fetch(`${apiBase}/events/${id}`, { signal: controller.signal });
+        clearTimeout(timeoutId);
         const data = await res.json();
         if (data && data.title) {
           setExistingEvent(data);
@@ -177,7 +181,7 @@ export const AdminCreateEditEvent: React.FC = () => {
     const storagePath = `events/${Date.now()}_${sanitizedName}`;
     const storageRef = ref(storage, storagePath);
 
-    return new Promise((resolve, reject) => {
+    const uploadPromise = new Promise<string>((resolve, reject) => {
       const uploadTask = uploadBytesResumable(storageRef, file, {
         contentType: file.type,
       });
@@ -203,6 +207,20 @@ export const AdminCreateEditEvent: React.FC = () => {
         }
       );
     });
+
+    const timeoutPromise = new Promise<string>((_, reject) =>
+      setTimeout(
+        () =>
+          reject(
+            new Error(
+              'Upload timed out (15s). Firebase Storage may be unreachable or unprovisioned. Please enter an Image URL directly or use a Category Preset.'
+            )
+          ),
+        15000
+      )
+    );
+
+    return Promise.race([uploadPromise, timeoutPromise]);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -282,9 +300,12 @@ export const AdminCreateEditEvent: React.FC = () => {
       // STEP 2: Save Event Specification to Firestore via REST API (compact JSON payload with image URL only)
       setUploadStatusText(isEditing ? 'Updating event specification...' : 'Publishing event to Firestore...');
       const token = await getIdToken();
-      const apiBase = import.meta.env.VITE_API_BASE_URL || '/api';
+      const apiBase = getApiBaseUrl();
       const url = isEditing ? `${apiBase}/events/${id}` : `${apiBase}/events`;
       const method = isEditing ? 'PUT' : 'POST';
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
 
       const response = await fetch(url, {
         method,
@@ -309,7 +330,9 @@ export const AdminCreateEditEvent: React.FC = () => {
           status,
           featured,
         }),
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
 
       const data = await response.json();
       if (!response.ok) {
@@ -324,7 +347,11 @@ export const AdminCreateEditEvent: React.FC = () => {
       navigate('/admin/events');
     } catch (err: any) {
       console.error('Error saving event:', err);
-      setError(err.message || 'Error executing event save.');
+      setError(
+        err.name === 'AbortError'
+          ? 'Network request timed out. Please check your internet connection or server availability and try again.'
+          : err.message || 'Error executing event save.'
+      );
     } finally {
       setSaving(false);
       setUploadStatusText(null);

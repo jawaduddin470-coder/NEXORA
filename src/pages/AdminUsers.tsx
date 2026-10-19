@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { AdminLayout } from '../components/admin/AdminLayout';
 import { Badge } from '../components/ui/Badge';
+import { getApiBaseUrl } from '../lib/api';
 import {
   Users,
   Search,
@@ -38,7 +39,7 @@ export const AdminUsers: React.FC = () => {
       try {
         setLoading(true);
         const token = await getIdToken();
-        const apiBase = import.meta.env.VITE_API_BASE_URL || '/api';
+        const apiBase = getApiBaseUrl();
         const res = await fetch(`${apiBase}/admin/users`, {
           headers: {
             Authorization: `Bearer ${token}`,

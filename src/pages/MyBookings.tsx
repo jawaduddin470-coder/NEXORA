@@ -5,6 +5,7 @@ import { db } from '../lib/firebase';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { BookingItem } from '../types';
+import { getApiBaseUrl } from '../lib/api';
 import { Button } from '../components/ui/Button';
 import {
   Ticket,
@@ -66,7 +67,7 @@ export const MyBookings: React.FC = () => {
         return;
       }
 
-      const apiBase = import.meta.env.VITE_API_BASE_URL || '/api';
+      const apiBase = getApiBaseUrl();
       const res = await fetch(`${apiBase}/bookings/${cancellingBooking.bookingId}/cancel`, {
         method: 'POST',
         headers: {

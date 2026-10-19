@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { collection, getDocs } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import { getApiBaseUrl } from '../lib/api';
 import { EventItem } from '../types';
 import { Search, Filter, Calendar, MapPin, ArrowUpDown, Sparkles, Compass, X } from 'lucide-react';
 import { EventCard } from '../components/events/EventCard';
@@ -53,7 +54,7 @@ export const EventDiscovery: React.FC = () => {
         // If direct Firestore returned no events or threw an error, fallback to REST API
         if (list.length === 0) {
           try {
-            const apiBase = import.meta.env.VITE_API_BASE_URL || '/api';
+            const apiBase = getApiBaseUrl();
             const res = await fetch(`${apiBase}/events?status=published`);
             if (res.ok) {
               const data = await res.json();

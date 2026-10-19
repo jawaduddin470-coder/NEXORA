@@ -4,6 +4,7 @@ import { AdminLayout } from '../components/admin/AdminLayout';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { NotificationItem } from '../types';
+import { getApiBaseUrl } from '../lib/api';
 import {
   Bell,
   ShieldCheck,
@@ -43,7 +44,7 @@ export const AdminNotifications: React.FC = () => {
       setLoading(true);
       setError(null);
       const token = await getIdToken();
-      const apiBase = import.meta.env.VITE_API_BASE_URL || '/api';
+      const apiBase = getApiBaseUrl();
       const res = await fetch(`${apiBase}/admin/notifications`, {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -77,7 +78,7 @@ export const AdminNotifications: React.FC = () => {
       );
 
       const token = await getIdToken();
-      const apiBase = import.meta.env.VITE_API_BASE_URL || '/api';
+      const apiBase = getApiBaseUrl();
       const res = await fetch(`${apiBase}/admin/notifications/${id}/read`, {
         method: 'PUT',
         headers: {
@@ -107,7 +108,7 @@ export const AdminNotifications: React.FC = () => {
       setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
 
       const token = await getIdToken();
-      const apiBase = import.meta.env.VITE_API_BASE_URL || '/api';
+      const apiBase = getApiBaseUrl();
       const res = await fetch(`${apiBase}/admin/notifications/mark-all-read`, {
         method: 'PUT',
         headers: {

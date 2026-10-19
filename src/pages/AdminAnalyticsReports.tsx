@@ -4,6 +4,7 @@ import { useToast } from '../context/ToastContext';
 import { AdminLayout } from '../components/admin/AdminLayout';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
+import { getApiBaseUrl } from '../lib/api';
 import {
   ShieldCheck,
   FileSpreadsheet,
@@ -34,7 +35,7 @@ export const AdminAnalyticsReports: React.FC = () => {
         return;
       }
 
-      const apiBase = import.meta.env.VITE_API_BASE_URL || '/api';
+      const apiBase = getApiBaseUrl();
       const params = new URLSearchParams();
       params.append('type', type);
       if (categoryFilter !== 'all') params.append('category', categoryFilter);

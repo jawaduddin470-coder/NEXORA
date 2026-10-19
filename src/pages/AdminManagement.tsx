@@ -4,6 +4,7 @@ import { useToast } from '../context/ToastContext';
 import { AdminLayout } from '../components/admin/AdminLayout';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
+import { getApiBaseUrl } from '../lib/api';
 import {
   ShieldCheck,
   UserCheck,
@@ -60,7 +61,7 @@ export const AdminManagement: React.FC = () => {
       setLoading(true);
       setError(null);
       const token = await getIdToken();
-      const apiBase = import.meta.env.VITE_API_BASE_URL || '/api';
+      const apiBase = getApiBaseUrl();
       const res = await fetch(`${apiBase}/admin/admins`, {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -116,7 +117,7 @@ export const AdminManagement: React.FC = () => {
     try {
       setFormSubmitting(true);
       const token = await getIdToken();
-      const apiBase = import.meta.env.VITE_API_BASE_URL || '/api';
+      const apiBase = getApiBaseUrl();
       const res = await fetch(`${apiBase}/admin/admins`, {
         method: 'POST',
         headers: {
