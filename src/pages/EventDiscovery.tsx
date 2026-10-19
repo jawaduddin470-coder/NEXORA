@@ -34,17 +34,38 @@ export const EventDiscovery: React.FC = () => {
 
   useEffect(() => {
     async function fetchEvents() {
-      if (!db) {
-        setLoading(false);
-        return;
-      }
       try {
         setLoading(true);
-        const snap = await getDocs(collection(db, 'events'));
-        const list = snap.docs.map((doc) => ({
-          eventId: doc.id,
-          ...doc.data(),
-        })) as EventItem[];
+        let list: EventItem[] = [];
+
+        if (db) {
+          try {
+            const snap = await getDocs(collection(db, 'events'));
+            list = snap.docs.map((doc) => ({
+              eventId: doc.id,
+              ...(doc.data() as any),
+            })) as EventItem[];
+          } catch (firestoreErr) {
+            console.warn('Direct Firestore fetch encountered an error, falling back to REST API:', firestoreErr);
+          }
+        }
+
+        // If direct Firestore returned no events or threw an error, fallback to REST API
+        if (list.length === 0) {
+          try {
+            const apiBase = import.meta.env.VITE_API_BASE_URL || '/api';
+            const res = await fetch(`${apiBase}/events?status=published`);
+            if (res.ok) {
+              const data = await res.json();
+              list = (data.events || []).map((e: any) => ({
+                ...e,
+                eventId: e.eventId || e.id,
+              }));
+            }
+          } catch (apiErr) {
+            console.error('API fallback fetch error:', apiErr);
+          }
+        }
 
         const validEvents = list.filter((e) => e.status !== 'draft');
         setEvents(validEvents);

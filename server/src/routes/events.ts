@@ -153,32 +153,35 @@ router.post('/', authMiddleware, adminMiddleware, async (req: AuthenticatedReque
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/(^-|-$)+/g, '');
 
+    const docRef = adminDb.collection('events').doc();
+
     const newEvent = {
+      eventId: docRef.id,
       title: title.trim(),
       slug,
       description: description.trim(),
       category,
       bannerImage: bannerImage || 'https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=1200',
       date,
-      time: time || startTime || '09:00 AM',
-      startTime: startTime || time || '09:00 AM',
-      endTime: endTime || '05:00 PM',
+      time: time || (startTime && endTime ? `${startTime} - ${endTime}` : startTime || '09:00 AM'),
+      startTime: startTime || time?.split(' - ')[0] || '09:00 AM',
+      endTime: endTime || time?.split(' - ')[1] || '05:00 PM',
       venue: venue.trim(),
-      location: location || venue,
-      city: city || location || venue,
+      location: location || `${venue.trim()}, ${city || ''}`.trim().replace(/,\s*$/, ''),
+      city: city || location || venue.trim(),
       organizerId: req.user!.uid,
       organizerName: req.user!.name || 'NEXORA Admin',
       capacity: capacityNum,
       availableSeats: capacityNum,
       ticketPrice: priceNum,
-      status,
+      status: status || 'published',
       featured: Boolean(featured),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       createdBy: req.user!.uid,
     };
 
-    const docRef = await adminDb.collection('events').add(newEvent);
+    await docRef.set(newEvent);
 
     // Audit Log
     await adminDb.collection('activityLogs').add({
@@ -188,7 +191,7 @@ router.post('/', authMiddleware, adminMiddleware, async (req: AuthenticatedReque
       createdAt: new Date().toISOString(),
     });
 
-    res.status(201).json({ eventId: docRef.id, ...newEvent });
+    res.status(201).json(newEvent);
   } catch (error: any) {
     console.error('Create Event Error:', error.message);
     res.status(500).json({ error: 'Server Error', message: error.message });
@@ -212,10 +215,15 @@ router.put('/:id', authMiddleware, adminMiddleware, async (req: AuthenticatedReq
     }
 
     const existingData = doc.data()!;
-    const ticketsBooked = existingData.capacity - existingData.availableSeats;
+    const existingCapacity = Number(existingData.capacity) || 0;
+    const existingAvailable = existingData.availableSeats !== undefined
+      ? Number(existingData.availableSeats)
+      : existingCapacity;
+    const ticketsBooked = Math.max(0, existingCapacity - existingAvailable);
 
     const updateData: any = {
       ...req.body,
+      eventId: docId,
       updatedAt: new Date().toISOString(),
     };
 
@@ -246,6 +254,14 @@ router.put('/:id', authMiddleware, adminMiddleware, async (req: AuthenticatedReq
         return;
       }
       updateData.ticketPrice = priceNum;
+    }
+
+    if (req.body.title && typeof req.body.title === 'string' && req.body.title.trim()) {
+      updateData.title = req.body.title.trim();
+      updateData.slug = req.body.title
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/(^-|-$)+/g, '');
     }
 
     await eventRef.update(updateData);

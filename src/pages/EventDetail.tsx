@@ -38,19 +38,38 @@ export const EventDetail: React.FC = () => {
     }
 
     const eventRef = doc(db, 'events', id);
+
+    const fetchFallback = async () => {
+      try {
+        const apiBase = import.meta.env.VITE_API_BASE_URL || '/api';
+        const res = await fetch(`${apiBase}/events/${id}`);
+        if (res.ok) {
+          const data = await res.json();
+          setEvent({ eventId: data.eventId || id, ...data });
+        } else {
+          setEvent(null);
+        }
+      } catch (err) {
+        console.error('API event detail fetch error:', err);
+        setEvent(null);
+      } finally {
+        setLoading(false);
+      }
+    };
+
     const unsubscribe = onSnapshot(
       eventRef,
       (docSnap) => {
         if (docSnap.exists()) {
-          setEvent({ eventId: docSnap.id, ...docSnap.data() } as EventItem);
+          setEvent({ eventId: docSnap.id, ...(docSnap.data() as any) } as EventItem);
+          setLoading(false);
         } else {
-          setEvent(null);
+          fetchFallback();
         }
-        setLoading(false);
       },
       (err) => {
-        console.error('Realtime Event detail error:', err);
-        setLoading(false);
+        console.warn('Realtime Event detail error, falling back to API:', err);
+        fetchFallback();
       }
     );
 
