@@ -51,48 +51,6 @@ const CATEGORY_PRESETS: Record<EventCategory, string> = {
   Conference: 'https://images.unsplash.com/photo-1505373877841-8d25f7d46678?w=1200',
 };
 
-// Client-side image compressor: scales down large images to high-quality lightweight data URLs (<150KB)
-const compressImageFile = (file: File): Promise<string> => {
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        let width = img.width;
-        let height = img.height;
-        const MAX_WIDTH = 1200;
-        if (width > MAX_WIDTH) {
-          height = Math.round((height * MAX_WIDTH) / width);
-          width = MAX_WIDTH;
-        }
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          resolve(e.target?.result as string);
-          return;
-        }
-        ctx.drawImage(img, 0, 0, width, height);
-        try {
-          const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
-          resolve(dataUrl);
-        } catch {
-          resolve(e.target?.result as string);
-        }
-      };
-      img.onerror = () => {
-        resolve(e.target?.result as string);
-      };
-      img.src = e.target?.result as string;
-    };
-    reader.onerror = () => {
-      resolve('https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=1200');
-    };
-    reader.readAsDataURL(file);
-  });
-};
-
 export const AdminCreateEditEvent: React.FC = () => {
   const { id } = useParams<{ id?: string }>();
   const isEditing = Boolean(id);
@@ -171,7 +129,7 @@ export const AdminCreateEditEvent: React.FC = () => {
     };
   }, [previewUrl]);
 
-  // Handle local file selection with instant preview & validation
+  // Handle local file selection with instant preview & validation (5MB max)
   const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -181,8 +139,8 @@ export const AdminCreateEditEvent: React.FC = () => {
       return;
     }
 
-    if (file.size > 10 * 1024 * 1024) {
-      setError('Image file size must not exceed 10MB.');
+    if (file.size > 5 * 1024 * 1024) {
+      setError('Image file size must not exceed 5MB.');
       return;
     }
 
@@ -209,58 +167,42 @@ export const AdminCreateEditEvent: React.FC = () => {
     }
   };
 
-  // Upload helper to upload image to Firebase Storage with automatic resilient fallback
+  // Upload helper to upload image directly to Firebase Storage and return download URL
   const uploadImageToStorage = async (file: File): Promise<string> => {
-    // 1. Pre-generate compressed data URL to guarantee zero data loss
-    const fallbackDataUrl = await compressImageFile(file);
-
     if (!storage) {
-      console.warn('Firebase Storage client not initialized; preserving image with embedded fallback.');
-      return fallbackDataUrl;
+      throw new Error('Firebase Storage client is not initialized.');
     }
 
     const sanitizedName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
     const storagePath = `events/${Date.now()}_${sanitizedName}`;
     const storageRef = ref(storage, storagePath);
 
-    try {
-      const uploadPromise = new Promise<string>((resolve, reject) => {
-        const uploadTask = uploadBytesResumable(storageRef, file, {
-          contentType: file.type,
-        });
-
-        uploadTask.on(
-          'state_changed',
-          (snapshot) => {
-            const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-            setUploadProgress(Math.round(progress));
-            setUploadStatusText(`Uploading banner... ${Math.round(progress)}%`);
-          },
-          (uploadErr) => {
-            console.warn('Firebase Storage upload warning:', uploadErr);
-            reject(uploadErr);
-          },
-          async () => {
-            try {
-              const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
-              resolve(downloadUrl);
-            } catch (urlErr) {
-              reject(urlErr);
-            }
-          }
-        );
+    return new Promise((resolve, reject) => {
+      const uploadTask = uploadBytesResumable(storageRef, file, {
+        contentType: file.type,
       });
 
-      // 5-second race timeout so storage hangs never block publication
-      const timeoutPromise = new Promise<string>((_, reject) =>
-        setTimeout(() => reject(new Error('Firebase Storage upload timed out')), 5000)
+      uploadTask.on(
+        'state_changed',
+        (snapshot) => {
+          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+          setUploadProgress(Math.round(progress));
+          setUploadStatusText(`Uploading banner to Firebase Storage... ${Math.round(progress)}%`);
+        },
+        (uploadErr) => {
+          console.error('Firebase Storage upload error:', uploadErr);
+          reject(new Error(uploadErr.message || 'Firebase Storage upload failed.'));
+        },
+        async () => {
+          try {
+            const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
+            resolve(downloadUrl);
+          } catch (urlErr: any) {
+            reject(new Error(urlErr.message || 'Failed to retrieve download URL for uploaded banner.'));
+          }
+        }
       );
-
-      return await Promise.race([uploadPromise, timeoutPromise]);
-    } catch (storageErr: any) {
-      console.warn('Storage upload unavailable, gracefully utilizing optimized embedded banner fallback:', storageErr?.message);
-      return fallbackDataUrl;
-    }
+    });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -311,23 +253,33 @@ export const AdminCreateEditEvent: React.FC = () => {
     try {
       setSaving(true);
 
-      // STEP 1: Upload or prepare banner
+      // STEP 1: Upload banner directly to Firebase Storage if a new file is selected
       let finalBannerUrl = bannerImage.trim() || CATEGORY_PRESETS[category] || 'https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=1200';
       if (selectedFile) {
-        setUploadStatusText('Preparing event banner...');
-        setUploadProgress(20);
+        setUploadStatusText('Uploading banner to Firebase Storage...');
+        setUploadProgress(0);
         try {
           finalBannerUrl = await uploadImageToStorage(selectedFile);
           setBannerImage(finalBannerUrl);
         } catch (uploadError: any) {
-          console.warn('Banner upload error, utilizing safe fallback banner:', uploadError);
-          if (!finalBannerUrl) {
-            finalBannerUrl = CATEGORY_PRESETS[category];
-          }
+          console.error('Banner upload failed:', uploadError);
+          setError(`Banner upload failed: ${uploadError.message}. Event was not saved.`);
+          addToast('Upload Error', uploadError.message || 'Image upload failed', 'error');
+          setSaving(false);
+          setUploadStatusText(null);
+          return; // Do NOT proceed to save if image upload was requested but failed
         }
       }
 
-      // STEP 2: Save Event Specification to Firestore via REST API
+      // Explicit Safety Check: Do NOT allow Base64 data URLs in event metadata payload
+      if (finalBannerUrl.startsWith('data:')) {
+        setError('Invalid banner format: Base64 data URLs cannot be embedded in event metadata. Please upload an image file or provide an external image URL.');
+        setSaving(false);
+        setUploadStatusText(null);
+        return;
+      }
+
+      // STEP 2: Save Event Specification to Firestore via REST API (compact JSON payload with image URL only)
       setUploadStatusText(isEditing ? 'Updating event specification...' : 'Publishing event to Firestore...');
       const token = await getIdToken();
       const apiBase = import.meta.env.VITE_API_BASE_URL || '/api';
@@ -526,7 +478,7 @@ export const AdminCreateEditEvent: React.FC = () => {
                     </button>
                   </div>
                   <p className="text-[11px] text-slate-400 leading-relaxed">
-                    Upload your own banner file, paste any image URL, or choose the category preset banner.
+                    Supported formats: PNG, JPG, JPEG, WEBP (Max 5 MB). Upload directly to Firebase Storage, paste an image URL, or choose a category preset.
                   </p>
                 </div>
 

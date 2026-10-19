@@ -136,6 +136,14 @@ router.post('/', authMiddleware, adminMiddleware, async (req: AuthenticatedReque
       return;
     }
 
+    if (bannerImage && typeof bannerImage === 'string' && bannerImage.startsWith('data:')) {
+      res.status(400).json({
+        error: 'Bad Request',
+        message: 'Base64 data URLs cannot be used as banner images. Please upload the image to Firebase Storage or provide an image URL.',
+      });
+      return;
+    }
+
     const capacityNum = Number(capacity);
     if (isNaN(capacityNum) || capacityNum <= 0) {
       res.status(400).json({ error: 'Bad Request', message: 'Total capacity must be a positive number greater than 0.' });
@@ -254,6 +262,14 @@ router.put('/:id', authMiddleware, adminMiddleware, async (req: AuthenticatedReq
         return;
       }
       updateData.ticketPrice = priceNum;
+    }
+
+    if (req.body.bannerImage && typeof req.body.bannerImage === 'string' && req.body.bannerImage.startsWith('data:')) {
+      res.status(400).json({
+        error: 'Bad Request',
+        message: 'Base64 data URLs cannot be used as banner images. Please upload the image to Firebase Storage or provide an image URL.',
+      });
+      return;
     }
 
     if (req.body.title && typeof req.body.title === 'string' && req.body.title.trim()) {
