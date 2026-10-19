@@ -6,6 +6,10 @@ import {
   createUserWithEmailAndPassword,
   signOut as firebaseSignOut,
   updateProfile as updateFirebaseProfile,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
 } from 'firebase/auth';
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { auth, db, isFirebaseConfigured } from '../lib/firebase';
@@ -20,6 +24,7 @@ interface AuthContextType {
   isAdmin: boolean;
   getIdToken: () => Promise<string | null>;
   login: (email: string, pass: string) => Promise<UserProfile | null>;
+  loginWithGoogle: () => Promise<UserProfile | null>;
   register: (name: string, email: string, pass: string) => Promise<void>;
   logout: () => Promise<void>;
   updateProfileData: (data: { name?: string; profileImage?: string }) => Promise<void>;
@@ -46,6 +51,18 @@ function formatFirebaseError(code: string, defaultMsg: string): string {
       return 'Network error. Please check your internet connection and try again.';
     case 'auth/too-many-requests':
       return 'Too many unsuccessful login attempts. Please try again later.';
+    case 'auth/popup-closed-by-user':
+      return 'Google sign-in popup was closed before completing authentication.';
+    case 'auth/cancelled-popup-request':
+      return 'Only one sign-in request can be active at a time.';
+    case 'auth/popup-blocked':
+      return 'Google sign-in popup was blocked by your browser. Please allow popups or redirect.';
+    case 'auth/operation-not-allowed':
+      return 'Google sign-in is not enabled in Firebase Console. Please enable it in Authentication -> Sign-in method.';
+    case 'auth/account-exists-with-different-credential':
+      return 'An account already exists with the same email address using a different sign-in method. Please sign in with your email and password.';
+    case 'auth/unauthorized-domain':
+      return 'This domain is not authorized for OAuth in Firebase Console. Please add it to Authentication -> Settings -> Authorized domains.';
     default:
       return defaultMsg;
   }
@@ -63,6 +80,37 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
 
+    // Process redirect sign-in result if user was redirected for Google Sign-In
+    getRedirectResult(auth)
+      .then(async (result) => {
+        if (result && result.user && db) {
+          const userDocRef = doc(db, 'users', result.user.uid);
+          const docSnap = await getDoc(userDocRef);
+          if (!docSnap.exists()) {
+            const displayName = result.user.displayName || result.user.email?.split('@')[0] || 'User';
+            const defaultProfile: UserProfile = {
+              userId: result.user.uid,
+              name: displayName,
+              email: result.user.email || '',
+              role: 'user', // STRICTLY DEFAULT 'user'
+              profileImage: result.user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(displayName)}`,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            };
+            try {
+              await setDoc(userDocRef, defaultProfile);
+              setUserProfile(defaultProfile);
+            } catch (writeErr) {
+              console.warn('Could not create redirect user profile document:', writeErr);
+            }
+          }
+        }
+      })
+      .catch((err) => {
+        console.error('getRedirectResult error:', err);
+        setError(formatFirebaseError(err.code, err.message || 'Google sign-in failed.'));
+      });
+
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       try {
         if (currentUser && db) {
@@ -74,12 +122,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             setUserProfile(docSnap.data() as UserProfile);
           } else {
             // Default user profile if document doesn't exist yet
+            const displayName = currentUser.displayName || currentUser.email?.split('@')[0] || 'User';
             const defaultProfile: UserProfile = {
               userId: currentUser.uid,
-              name: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+              name: displayName,
               email: currentUser.email || '',
               role: 'user', // DEFAULT ROLE = USER
-              profileImage: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(currentUser.displayName || currentUser.uid)}`,
+              profileImage: currentUser.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(displayName)}`,
               createdAt: new Date().toISOString(),
               updatedAt: new Date().toISOString(),
             };
@@ -108,6 +157,61 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const getIdToken = async (): Promise<string | null> => {
     if (!user) return null;
     return await user.getIdToken();
+  };
+
+  const loginWithGoogle = async (): Promise<UserProfile | null> => {
+    if (!auth || !db) throw new Error('Firebase Auth/Firestore is not initialized');
+    setError(null);
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+
+    try {
+      let cred;
+      try {
+        cred = await signInWithPopup(auth, provider);
+      } catch (popupErr: any) {
+        if (popupErr.code === 'auth/popup-blocked') {
+          console.warn('Popup blocked by browser, falling back to signInWithRedirect...');
+          await signInWithRedirect(auth, provider);
+          return null;
+        }
+        throw popupErr;
+      }
+
+      if (!cred || !cred.user) {
+        return null;
+      }
+
+      const userDocRef = doc(db, 'users', cred.user.uid);
+      const docSnap = await getDoc(userDocRef);
+
+      let profile: UserProfile;
+      if (docSnap.exists()) {
+        // PRESERVE EXISTING PROFILE & ROLE! NEVER overwrite with 'user'
+        profile = docSnap.data() as UserProfile;
+      } else {
+        // First-time Google user - create profile with default role 'user'
+        const displayName = cred.user.displayName || cred.user.email?.split('@')[0] || 'User';
+        profile = {
+          userId: cred.user.uid,
+          name: displayName,
+          email: cred.user.email || '',
+          role: 'user', // STRICTLY DEFAULT 'user'
+          profileImage: cred.user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(displayName)}`,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        await setDoc(userDocRef, profile);
+      }
+
+      setUser(cred.user);
+      setUserProfile(profile);
+      return profile;
+    } catch (err: any) {
+      const formatted = formatFirebaseError(err.code, err.message || 'Google sign-in failed.');
+      setError(formatted);
+      throw new Error(formatted);
+    }
   };
 
   const login = async (email: string, pass: string): Promise<UserProfile | null> => {
@@ -238,6 +342,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isAdmin,
         getIdToken,
         login,
+        loginWithGoogle,
         register,
         logout,
         updateProfileData,

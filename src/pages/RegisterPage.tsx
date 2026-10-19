@@ -1,20 +1,24 @@
 import React, { useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { User, Mail, Lock, ArrowRight, AlertCircle, Eye, EyeOff, ShieldCheck, CheckCircle2 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { NexoraLogo } from '../components/common/NexoraLogo';
+import { GoogleIcon } from '../components/ui/GoogleIcon';
 
 export const RegisterPage: React.FC = () => {
-  const { user, isAuthenticated, loading: authLoading, register, error, clearError } = useAuth();
+  const { user, userProfile, isAuthenticated, loading: authLoading, register, loginWithGoogle, error, clearError } = useAuth();
   const { addToast } = useToast();
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
 
-  // Redirect destination priority: ?returnTo -> ?redirect -> /dashboard
+  // Redirect destination priority: ?returnTo -> ?redirect -> router state -> /dashboard
   const returnToParam = searchParams.get('returnTo') || searchParams.get('redirect');
-  const destination = returnToParam || '/dashboard';
+  const fromState = location.state?.from;
+  const statePath = typeof fromState === 'string' ? fromState : fromState?.pathname ? `${fromState.pathname}${fromState.search || ''}` : null;
+  const destination = returnToParam || statePath || '/dashboard';
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -22,14 +26,16 @@ export const RegisterPage: React.FC = () => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
 
   // If already authenticated, redirect immediately
   React.useEffect(() => {
     if (!authLoading && isAuthenticated && user) {
-      navigate(destination, { replace: true });
+      const target = userProfile?.role === 'admin' && destination === '/dashboard' ? '/admin/overview' : destination;
+      navigate(target, { replace: true });
     }
-  }, [authLoading, isAuthenticated, user, destination, navigate]);
+  }, [authLoading, isAuthenticated, user, userProfile, destination, navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,11 +60,30 @@ export const RegisterPage: React.FC = () => {
       setLoading(true);
       await register(name.trim(), email.trim(), password);
       addToast('Account Created!', 'Your NEXORA account and profile have been initialized.', 'success');
-      navigate(destination, { replace: true });
+      const target = userProfile?.role === 'admin' && destination === '/dashboard' ? '/admin/overview' : destination;
+      navigate(target, { replace: true });
     } catch (err: any) {
       console.error('Registration error:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setValidationError(null);
+    clearError();
+    try {
+      setGoogleLoading(true);
+      const profile = await loginWithGoogle();
+      if (profile) {
+        addToast('Welcome to NEXORA!', `Signed in as ${profile.name || profile.email}.`, 'success');
+        const target = profile.role === 'admin' && destination === '/dashboard' ? '/admin/overview' : destination;
+        navigate(target, { replace: true });
+      }
+    } catch (err: any) {
+      console.error('Google registration error:', err);
+    } finally {
+      setGoogleLoading(false);
     }
   };
 
@@ -218,7 +243,7 @@ export const RegisterPage: React.FC = () => {
 
             <Button
               type="submit"
-              disabled={loading}
+              disabled={loading || googleLoading}
               loading={loading}
               variant="primary"
               size="lg"
@@ -229,10 +254,37 @@ export const RegisterPage: React.FC = () => {
             </Button>
           </form>
 
+          {/* Divider */}
+          <div className="relative my-1">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-slate-200 dark:border-slate-800" />
+            </div>
+            <div className="relative flex justify-center text-[10px] uppercase font-bold tracking-widest">
+              <span className="bg-white/95 dark:bg-slate-900/95 px-3 text-slate-400 dark:text-slate-500 font-mono">
+                OR CONTINUE WITH
+              </span>
+            </div>
+          </div>
+
+          {/* Continue with Google Button */}
+          <Button
+            type="button"
+            onClick={handleGoogleSignIn}
+            disabled={loading || googleLoading}
+            loading={googleLoading}
+            variant="outline"
+            size="lg"
+            className="w-full font-bold bg-white dark:bg-slate-950 hover:bg-slate-50 dark:hover:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-100 shadow-soft-sm py-3 rounded-2xl transition-all"
+            icon={<GoogleIcon className="w-4 h-4" />}
+          >
+            Continue with Google
+          </Button>
+
           <div className="text-center pt-2 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400">
             Already have an account?{' '}
             <Link
-              to={returnToParam ? `/login?returnTo=${encodeURIComponent(returnToParam)}` : '/login'}
+              to={returnToParam ? `/login?returnTo=${encodeURIComponent(returnToParam)}` : (statePath ? `/login?returnTo=${encodeURIComponent(statePath)}` : '/login')}
+              state={location.state}
               className="font-bold text-brand-purple dark:text-brand-violet-light hover:underline"
             >
               Sign in here

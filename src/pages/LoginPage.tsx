@@ -5,9 +5,10 @@ import { useToast } from '../context/ToastContext';
 import { Mail, Lock, ArrowRight, AlertCircle, Eye, EyeOff, ShieldCheck, CheckCircle2 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { NexoraLogo } from '../components/common/NexoraLogo';
+import { GoogleIcon } from '../components/ui/GoogleIcon';
 
 export const LoginPage: React.FC = () => {
-  const { user, userProfile, isAuthenticated, loading: authLoading, login, error, clearError } = useAuth();
+  const { user, userProfile, isAuthenticated, loading: authLoading, login, loginWithGoogle, error, clearError } = useAuth();
   const { addToast } = useToast();
   const navigate = useNavigate();
   const location = useLocation();
@@ -15,12 +16,15 @@ export const LoginPage: React.FC = () => {
 
   // Redirect destination priority: ?returnTo -> ?redirect -> router state -> /dashboard
   const returnToParam = searchParams.get('returnTo') || searchParams.get('redirect');
-  const destination = returnToParam || location.state?.from?.pathname || '/dashboard';
+  const fromState = location.state?.from;
+  const statePath = typeof fromState === 'string' ? fromState : fromState?.pathname ? `${fromState.pathname}${fromState.search || ''}` : null;
+  const destination = returnToParam || statePath || '/dashboard';
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
 
   // If already authenticated, redirect immediately
@@ -50,6 +54,24 @@ export const LoginPage: React.FC = () => {
       console.error('Login error:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setValidationError(null);
+    clearError();
+    try {
+      setGoogleLoading(true);
+      const profile = await loginWithGoogle();
+      if (profile) {
+        addToast('Welcome to NEXORA!', `Signed in as ${profile.name || profile.email}.`, 'success');
+        const target = profile.role === 'admin' && destination === '/dashboard' ? '/admin/overview' : destination;
+        navigate(target, { replace: true });
+      }
+    } catch (err: any) {
+      console.error('Google sign-in error:', err);
+    } finally {
+      setGoogleLoading(false);
     }
   };
 
@@ -165,7 +187,7 @@ export const LoginPage: React.FC = () => {
 
             <Button
               type="submit"
-              disabled={loading}
+              disabled={loading || googleLoading}
               loading={loading}
               variant="primary"
               size="lg"
@@ -176,10 +198,37 @@ export const LoginPage: React.FC = () => {
             </Button>
           </form>
 
+          {/* Divider */}
+          <div className="relative my-1">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-slate-200 dark:border-slate-800" />
+            </div>
+            <div className="relative flex justify-center text-[10px] uppercase font-bold tracking-widest">
+              <span className="bg-white/95 dark:bg-slate-900/95 px-3 text-slate-400 dark:text-slate-500 font-mono">
+                OR CONTINUE WITH
+              </span>
+            </div>
+          </div>
+
+          {/* Continue with Google Button */}
+          <Button
+            type="button"
+            onClick={handleGoogleSignIn}
+            disabled={loading || googleLoading}
+            loading={googleLoading}
+            variant="outline"
+            size="lg"
+            className="w-full font-bold bg-white dark:bg-slate-950 hover:bg-slate-50 dark:hover:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-100 shadow-soft-sm py-3 rounded-2xl transition-all"
+            icon={<GoogleIcon className="w-4 h-4" />}
+          >
+            Continue with Google
+          </Button>
+
           <div className="text-center pt-3 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400">
             Don't have an account yet?{' '}
             <Link
-              to={returnToParam ? `/register?returnTo=${encodeURIComponent(returnToParam)}` : '/register'}
+              to={returnToParam ? `/register?returnTo=${encodeURIComponent(returnToParam)}` : (statePath ? `/register?returnTo=${encodeURIComponent(statePath)}` : '/register')}
+              state={location.state}
               className="font-bold text-brand-purple dark:text-brand-violet-light hover:underline"
             >
               Create one now
