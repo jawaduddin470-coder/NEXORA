@@ -171,56 +171,155 @@ export const AdminCreateEditEvent: React.FC = () => {
     }
   };
 
-  // Upload helper to upload image directly to Firebase Storage and return download URL
-  const uploadImageToStorage = async (file: File): Promise<string> => {
-    if (!storage) {
-      throw new Error('Firebase Storage client is not initialized.');
+  // Compress and optimize image on client side before upload (max 1280px, ~150-250KB)
+  const prepareImageForUpload = async (
+    file: File,
+    maxDimension = 1280,
+    quality = 0.85
+  ): Promise<{ base64: string; contentType: string }> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const dataUrl = e.target?.result as string;
+        if (!dataUrl) {
+          return reject(new Error('Failed to read image file.'));
+        }
+
+        if (file.type === 'image/svg+xml') {
+          const parts = dataUrl.split(',');
+          return resolve({ base64: parts[1] || '', contentType: file.type });
+        }
+
+        const img = new Image();
+        img.onload = () => {
+          try {
+            let { width, height } = img;
+            if (width > maxDimension || height > maxDimension) {
+              if (width > height) {
+                height = Math.round((height * maxDimension) / width);
+                width = maxDimension;
+              } else {
+                width = Math.round((width * maxDimension) / height);
+                height = maxDimension;
+              }
+            }
+
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+              const parts = dataUrl.split(',');
+              return resolve({ base64: parts[1] || '', contentType: file.type || 'image/jpeg' });
+            }
+
+            ctx.drawImage(img, 0, 0, width, height);
+            const compressed = canvas.toDataURL('image/jpeg', quality);
+            const parts = compressed.split(',');
+            resolve({ base64: parts[1] || '', contentType: 'image/jpeg' });
+          } catch {
+            const parts = dataUrl.split(',');
+            resolve({ base64: parts[1] || '', contentType: file.type || 'image/jpeg' });
+          }
+        };
+        img.onerror = () => {
+          const parts = dataUrl.split(',');
+          resolve({ base64: parts[1] || '', contentType: file.type || 'image/jpeg' });
+        };
+        img.src = dataUrl;
+      };
+      reader.onerror = () => reject(new Error('Failed to read file from disk.'));
+      reader.readAsDataURL(file);
+    });
+  };
+
+  // Resilient banner upload helper:
+  // Tries Firebase Storage first (if provisioned), and seamlessly falls back to the
+  // internal NEXORA Cloud Image API (/api/upload -> /api/images/:id) so publishing never hangs or fails.
+  const uploadBannerImage = async (file: File): Promise<string> => {
+    setUploadStatusText('Preparing & optimizing banner image...');
+    setUploadProgress(20);
+
+    const prepared = await prepareImageForUpload(file);
+    setUploadProgress(45);
+
+    // Strategy 1: Attempt Firebase Storage if available with a fast 3-second race
+    if (storage) {
+      try {
+        setUploadStatusText('Connecting to storage...');
+        const sanitizedName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const storagePath = `events/${Date.now()}_${sanitizedName}`;
+        const storageRef = ref(storage, storagePath);
+
+        const storageUploadPromise = new Promise<string>((resolve, reject) => {
+          const uploadTask = uploadBytesResumable(storageRef, file, {
+            contentType: file.type,
+          });
+
+          uploadTask.on(
+            'state_changed',
+            (snapshot) => {
+              const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+              setUploadProgress(Math.round(progress));
+            },
+            (uploadErr) => reject(uploadErr),
+            async () => {
+              try {
+                const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
+                resolve(downloadUrl);
+              } catch (urlErr) {
+                reject(urlErr);
+              }
+            }
+          );
+        });
+
+        const timeoutPromise = new Promise<string>((_, reject) =>
+          setTimeout(() => reject(new Error('Firebase Storage unavailable or unprovisioned')), 3000)
+        );
+
+        const storageUrl = await Promise.race([storageUploadPromise, timeoutPromise]);
+        if (storageUrl) {
+          setUploadProgress(100);
+          return storageUrl;
+        }
+      } catch (storageErr) {
+        console.warn('Firebase Storage direct upload skipped, using resilient NEXORA Image Service:', storageErr);
+      }
     }
 
-    const sanitizedName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const storagePath = `events/${Date.now()}_${sanitizedName}`;
-    const storageRef = ref(storage, storagePath);
+    // Strategy 2: High-reliability internal cloud image service via /api/upload
+    setUploadStatusText('Saving banner image to NEXORA cloud storage...');
+    setUploadProgress(70);
 
-    const uploadPromise = new Promise<string>((resolve, reject) => {
-      const uploadTask = uploadBytesResumable(storageRef, file, {
-        contentType: file.type,
-      });
+    const token = await getIdToken();
+    const apiBase = getApiBaseUrl();
 
-      uploadTask.on(
-        'state_changed',
-        (snapshot) => {
-          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-          setUploadProgress(Math.round(progress));
-          setUploadStatusText(`Uploading banner to Firebase Storage... ${Math.round(progress)}%`);
-        },
-        (uploadErr) => {
-          console.error('Firebase Storage upload error:', uploadErr);
-          reject(new Error(uploadErr.message || 'Firebase Storage upload failed.'));
-        },
-        async () => {
-          try {
-            const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
-            resolve(downloadUrl);
-          } catch (urlErr: any) {
-            reject(new Error(urlErr.message || 'Failed to retrieve download URL for uploaded banner.'));
-          }
-        }
-      );
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+    const response = await fetch(`${apiBase}/upload`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        base64: prepared.base64,
+        contentType: prepared.contentType,
+        fileName: file.name,
+      }),
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
 
-    const timeoutPromise = new Promise<string>((_, reject) =>
-      setTimeout(
-        () =>
-          reject(
-            new Error(
-              'Upload timed out (15s). Firebase Storage may be unreachable or unprovisioned. Please enter an Image URL directly or use a Category Preset.'
-            )
-          ),
-        15000
-      )
-    );
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.message || 'Failed to upload banner image.');
+    }
 
-    return Promise.race([uploadPromise, timeoutPromise]);
+    setUploadProgress(100);
+    return data.url;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -271,13 +370,13 @@ export const AdminCreateEditEvent: React.FC = () => {
     try {
       setSaving(true);
 
-      // STEP 1: Upload banner directly to Firebase Storage if a new file is selected
+      // STEP 1: Upload banner if a new file is selected
       let finalBannerUrl = bannerImage.trim() || CATEGORY_PRESETS[category] || 'https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=1200';
       if (selectedFile) {
-        setUploadStatusText('Uploading banner to Firebase Storage...');
+        setUploadStatusText('Uploading banner image...');
         setUploadProgress(0);
         try {
-          finalBannerUrl = await uploadImageToStorage(selectedFile);
+          finalBannerUrl = await uploadBannerImage(selectedFile);
           setBannerImage(finalBannerUrl);
         } catch (uploadError: any) {
           console.error('Banner upload failed:', uploadError);
@@ -405,7 +504,7 @@ export const AdminCreateEditEvent: React.FC = () => {
             <div className="flex items-center justify-between">
               <label className="block text-xs font-bold text-slate-300 flex items-center space-x-1.5">
                 <ImageIcon className="w-4 h-4 text-brand-purple" />
-                <span>Event Banner Image (Firebase Storage)</span>
+                <span>Event Banner Image</span>
               </label>
               {selectedFile && (
                 <span className="text-[11px] text-cyan-400 font-mono flex items-center space-x-1">
@@ -505,7 +604,7 @@ export const AdminCreateEditEvent: React.FC = () => {
                     </button>
                   </div>
                   <p className="text-[11px] text-slate-400 leading-relaxed">
-                    Supported formats: PNG, JPG, JPEG, WEBP (Max 5 MB). Upload directly to Firebase Storage, paste an image URL, or choose a category preset.
+                    Supported formats: PNG, JPG, JPEG, WEBP (Max 5 MB). Upload directly from your device, paste an image URL, or choose a category preset.
                   </p>
                 </div>
 
